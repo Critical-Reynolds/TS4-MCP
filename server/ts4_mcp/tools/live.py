@@ -91,11 +91,11 @@ async def do_interaction(affordance_id: str, sim_id: str = "active", target_id: 
 
 
 @mcp.tool(annotations=MUTATING)
-async def cancel_interactions(sim_id: str = "active", interaction_id: int | None = None) -> str:
+async def cancel_interactions(sim_id: str = "active", interaction_id: int | str | None = None) -> str:
     """Cancel one interaction by id, or everything queued and running for the sim when interaction_id is omitted."""
     args: dict[str, Any] = {"sim_id": sim_id}
     if interaction_id is not None:
-        args["interaction_id"] = interaction_id
+        args["interaction_id"] = int(interaction_id)
     return _fmt(await _localized("interactions.cancel", args))
 
 
@@ -113,7 +113,7 @@ async def list_objects(query: str = "", near_sim_id: str = "", radius: float = 1
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def object_details(object_id: int) -> str:
+async def object_details(object_id: int | str) -> str:
     """Details of one object: definition, owner, states, inventory contents and its super affordances."""
     return _fmt(await _localized("objects.get", {"object_id": object_id}))
 
@@ -137,11 +137,11 @@ async def pending_dialogs() -> str:
 
 
 @mcp.tool(annotations=MUTATING)
-async def respond_dialog(dialog_id: int, response_id: str = "ok", picked: list[str] | None = None,
+async def respond_dialog(dialog_id: int | str, response_id: str = "ok", picked: list[str] | None = None,
                          text: str = "") -> str:
     """Answer an open dialog. response_id: a button's response_id, or ok|cancel|close. For pickers pass
     picked=[option_id,...]. For text prompts pass text."""
-    args: dict[str, Any] = {"dialog_id": dialog_id, "response_id": response_id}
+    args: dict[str, Any] = {"dialog_id": int(dialog_id), "response_id": response_id}
     if picked:
         args["picked"] = picked
     if text:

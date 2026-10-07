@@ -5,6 +5,9 @@ How to play
 - Start every session with `game_status`, then `look`. `look` is your main observation: lot, sim time
   and speed, household funds and members, the active sim's needs (-100..100), mood, buffs, queue, and
   pending dialogs. Re-read `ts4://journal` (or `journal_read`) to recover goals after context loss.
+- Always pass 18-digit ids (zone_id, object_id, household_id, dialog_id...) as quoted strings, e.g.
+  `travel(zone_id="891175376361099824")`. JSON numbers above 2^53 get rounded in transit and point at
+  the wrong (or a nonexistent) lot or object. Traveling to a rounded zone id hangs the loading screen.
 - Act through interactions: `list_objects` to find targets, `list_interactions(sim, target, query)` for
   what is possible right now (ids + English names), `do_interaction` to queue it. Social actions target
   another sim's id. `cancel_interactions` clears the queue.

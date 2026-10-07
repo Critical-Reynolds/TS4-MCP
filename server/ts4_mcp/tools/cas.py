@@ -9,7 +9,7 @@ from ts4_mcp.tools.live import _localized
 
 @mcp.tool(annotations=MUTATING)
 async def create_sim(first_name: str, last_name: str, gender: str = "", age: str = "YOUNGADULT",
-                     species: str = "HUMAN", traits: list[str] | None = None, household_id: int | None = None,
+                     species: str = "HUMAN", traits: list[str] | None = None, household_id: int | str | None = None,
                      spawn: bool = True) -> str:
     """Create a new sim with generated looks and add them to the active household (or household_id).
     gender MALE|FEMALE (random if empty); age BABY|INFANT|TODDLER|CHILD|TEEN|YOUNGADULT|ADULT|ELDER;
@@ -22,7 +22,7 @@ async def create_sim(first_name: str, last_name: str, gender: str = "", age: str
     if traits:
         args["traits"] = traits
     if household_id is not None:
-        args["household_id"] = household_id
+        args["household_id"] = int(household_id)
     return _fmt(await bridge_call("cas.create_sim", args, timeout=25.0))
 
 

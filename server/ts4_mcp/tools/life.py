@@ -23,20 +23,20 @@ async def list_households(player_only: bool = False, limit: int = 100) -> str:
 
 
 @mcp.tool(annotations=MUTATING)
-async def move_sim_to_household(sim_id: str, to_household_id: int | None = None) -> str:
+async def move_sim_to_household(sim_id: str, to_household_id: int | str | None = None) -> str:
     """Move a sim into another household (default: the active household, making them selectable).
     Used for move-ins, marriages, taking in roommates, splitting families."""
     args: dict[str, Any] = {"sim_id": sim_id}
     if to_household_id is not None:
-        args["to_household_id"] = to_household_id
+        args["to_household_id"] = int(to_household_id)
     return _fmt(await bridge_call("household.move_sim", args))
 
 
 @mcp.tool(annotations=DANGEROUS)
-async def move_household_to_lot(zone_id: int, furnished: bool = True) -> str:
+async def move_household_to_lot(zone_id: int | str, furnished: bool = True) -> str:
     """Move the active household into another residential lot (buy/move house). The game handles the
     transaction asynchronously and will travel there; follow with look."""
-    return _fmt(await bridge_call("household.move_into_zone", {"zone_id": zone_id, "furnished": furnished}))
+    return _fmt(await bridge_call("household.move_into_zone", {"zone_id": int(zone_id), "furnished": furnished}))
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -51,16 +51,17 @@ async def list_lots(residential_only: bool = False, unowned_only: bool = False, 
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def lot_value(zone_id: int) -> str:
+async def lot_value(zone_id: int | str) -> str:
     """Furnished and unfurnished value of a lot."""
-    return _fmt(await bridge_call("world.lot_value", {"zone_id": zone_id}))
+    return _fmt(await bridge_call("world.lot_value", {"zone_id": int(zone_id)}))
 
 
 @mcp.tool(annotations=MUTATING)
-async def travel(zone_id: int, sim_ids: list[str] | None = None, wait_seconds: int = 20) -> str:
+async def travel(zone_id: int | str, sim_ids: list[str] | None = None, wait_seconds: int = 20) -> str:
     """Travel to another lot (the active sim, or the given sims together). Shows a loading screen; this
     tool waits up to wait_seconds for the new lot to load and returns a snapshot."""
     client = get_client()
+    zone_id = int(zone_id)
     args: dict[str, Any] = {"zone_id": zone_id}
     if sim_ids:
         args["sim_ids"] = sim_ids

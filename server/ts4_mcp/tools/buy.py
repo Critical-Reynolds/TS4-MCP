@@ -123,7 +123,7 @@ async def lot_probe(x: float, z: float, level: int = 0) -> str:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def test_placement(x: float, z: float, def_id: int | None = None, object_id: int | None = None,
+async def test_placement(x: float, z: float, def_id: int | None = None, object_id: int | str | None = None,
                          level: int = 0, rotation: float = 0.0, height: float | None = None) -> str:
     """Check whether a catalog object (def_id) or an existing object (object_id) can legally sit at x,z
     with the given rotation in degrees. Returns the game's placement errors (plus hints) when not.
@@ -132,7 +132,7 @@ async def test_placement(x: float, z: float, def_id: int | None = None, object_i
     if def_id is not None:
         args["def_id"] = def_id
     if object_id is not None:
-        args["object_id"] = object_id
+        args["object_id"] = int(object_id)
     if height is not None:
         args["height"] = height
     return _fmt(await bridge_call("objects.test_placement", args))
@@ -155,11 +155,11 @@ async def buy_object(def_id: int, x: float, z: float, level: int = 0, rotation: 
 
 
 @mcp.tool(annotations=MUTATING)
-async def move_object(object_id: int, x: float, z: float, level: int | None = None,
+async def move_object(object_id: int | str, x: float, z: float, level: int | None = None,
                       rotation: float | None = None, height: float | None = None, force: bool = False) -> str:
     """Move and/or rotate an existing object (rotation in degrees; omit to keep current;
     height = metres above the floor for wall/ceiling objects)."""
-    args: dict[str, Any] = {"object_id": object_id, "x": x, "z": z, "force": force}
+    args: dict[str, Any] = {"object_id": int(object_id), "x": x, "z": z, "force": force}
     if level is not None:
         args["level"] = level
     if rotation is not None:
@@ -170,20 +170,20 @@ async def move_object(object_id: int, x: float, z: float, level: int | None = No
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def object_slots(object_id: int, empty_only: bool = False, include_deco: bool = True) -> str:
+async def object_slots(object_id: int | str, empty_only: bool = False, include_deco: bool = True) -> str:
     """Slots on an object (counter, table, desk, TV stand, nightstand...): slot name, slot types, whether
     empty and what sits there. Use a slot name with buy_into_slot."""
-    return _fmt(await _localized("objects.slots", {"object_id": object_id, "empty_only": empty_only,
+    return _fmt(await _localized("objects.slots", {"object_id": int(object_id), "empty_only": empty_only,
                                                     "include_deco": include_deco}))
 
 
 @mcp.tool(annotations=MUTATING)
-async def buy_into_slot(parent_id: int, def_id: int, slot: str = "", free: bool = False) -> str:
+async def buy_into_slot(parent_id: int | str, def_id: int, slot: str = "", free: bool = False) -> str:
     """Buy a catalog object into a slot on an existing object, charging household funds: a counter sink
     into a counter, dining/desk chairs at a table or desk (_ctnm_chr_N), a TV on a TV stand, a computer on
     a desk, a lamp on a nightstand (_deco_lrg). slot is a slot name or substring to prefer (see
     object_slots); empty picks the first empty slot that accepts the object."""
-    args: dict[str, Any] = {"parent_id": parent_id, "def_id": def_id, "free": free}
+    args: dict[str, Any] = {"parent_id": int(parent_id), "def_id": def_id, "free": free}
     if slot:
         args["slot"] = slot
     return _fmt(await _localized("objects.buy_into_slot", args))
@@ -216,6 +216,6 @@ async def autopilot_stop(pause: bool = True) -> str:
 
 
 @mcp.tool(annotations=DANGEROUS)
-async def sell_object(object_id: int) -> str:
+async def sell_object(object_id: int | str) -> str:
     """Sell (delete) an object and credit its current value to the household."""
-    return _fmt(await _localized("objects.sell", {"object_id": object_id}))
+    return _fmt(await _localized("objects.sell", {"object_id": int(object_id)}))
