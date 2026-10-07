@@ -16,7 +16,10 @@ How to play
   needed: `wait(sim_minutes=1440, max_seconds=900, speed="auto", wake_on=["idle", "needs", "sellable",
   "home", "awake"])`. speed=auto runs super speed while the sim sleeps or is at work. Never spin-poll.
 - Dialogs block the game. If `look`/`wait` report pending dialogs, `pending_dialogs` then
-  `respond_dialog` before anything else.
+  `respond_dialog` before anything else. Incoming phone calls arrive as dialogs marked `phone_call`
+  (answer them right away, like picking up the phone). Pickers (Invite Over, Chat With, Travel...) list
+  `picker_rows`; answer with `respond_dialog(dialog_id, picked=["Martha"])` (names, sim ids or
+  option ids), which selects and confirms in one step.
 - Keep a journal (`journal_append`): goals, plan, what worked, discovered ids and def_ids.
 - Save regularly with `save_game`, and always before risky experiments.
 

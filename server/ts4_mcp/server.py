@@ -102,7 +102,7 @@ async def run_python(code: str, max_chars: int = 4000, max_items: int = 200, res
 @mcp.tool(annotations=MUTATING)
 async def cheat(command: str, client_side: bool = False) -> str:
     """Run a Sims 4 console command. Examples: 'sims.modify_funds 5000', 'careers.promote Painter',
-    'stats.set_skill_level Major_Painting 10', 'persistence.save_game'. Set client_side=true for
+    'stats.set_skill_level Major_Painting 10'. Use save_game (not a console command) to save. Set client_side=true for
     bb.* / cas.* client cheats such as 'bb.moveobjects'. Use list_commands to discover commands."""
     result = await bridge_call("bridge.cheat", {"command": command, "client_side": client_side})
     lines = result.get("output") or []

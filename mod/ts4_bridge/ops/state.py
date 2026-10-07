@@ -19,6 +19,17 @@ def time_state():
     out = {'sim_now': g.sim_now_string(), 'speed': getattr(speed, 'name', str(speed)),
            'paused': speed == ClockSpeedMode.PAUSED}
     try:
+        from clock import GameSpeedChangeSource
+        modal = [r for r in gc.speed_controllers.get(GameSpeedChangeSource.UI_MODAL, ())
+                 if r.speed == ClockSpeedMode.PAUSED]
+        if modal:
+            out['paused_by_player_screen'] = True
+            out['pause_note'] = ("A window is open on the player's screen (for example a job panel, CAS or "
+                                 'a menu) and holds the game paused. Script cannot close it; ask the player to '
+                                 'close it.')
+    except Exception:
+        pass
+    try:
         now = services.time_service().sim_now
         out['day_of_week'] = int(now.day() % 7)
         out['hour'] = int(now.hour())

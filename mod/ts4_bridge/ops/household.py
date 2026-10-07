@@ -406,16 +406,47 @@ def world_travel(zone_id, sim_ids=None):
     return {'requested': True, 'zone_id': int(zone_id), 'sim_ids': [i.sim_id for i in infos], 'method': method}
 
 
-@op('persistence.save', doc='Save the game to the current slot (or a new slot). Fails while saving is locked.')
-def persistence_save(new_slot=False, with_autosave=False):
+_real_slot = globals().setdefault('_real_slot', {})
+
+
+def current_slot():
+    """The player's real save slot (id, name). Remembered because a scratch save rewrites the in-memory
+    slot record to (0, 'scratch')."""
+    try:
+        slot = services.get_persistence_service().get_save_slot_proto_buff()
+        sid, name = int(slot.slot_id), slot.slot_name
+        if sid and name != 'scratch':
+            _real_slot.update({'slot_id': sid, 'slot_name': name})
+    except Exception:
+        pass
+    return _real_slot.get('slot_id'), _real_slot.get('slot_name')
+
+
+@op('persistence.save', doc='Save to the save slot the player loaded (same as Save in the game menu), or to a '
+                            'new slot. The file on disk is written by the game; save.done fires when finished.')
+def persistence_save(new_slot=False, slot_name=None):
     g.require_zone()
     ps = services.get_persistence_service()
     if ps.is_save_locked():
         raise OpError('saving is locked right now (loading, build mode or a blocking interaction)')
-    cmd = 'persistence.save_to_new_slot' if new_slot else (
-        'persistence.save_game_with_autosave' if with_autosave else 'persistence.save_game')
+    slot_id, name = current_slot()
+    if new_slot:
+        cmd = 'persistence.save_to_new_slot 0 "%s"' % (slot_name or name or 'Unnamed').replace('"', "'")
+    else:
+        if not slot_id:
+            raise OpError('the loaded save slot is unknown (new unsaved game?); use new_slot=true with a slot_name')
+        # persistence.save_game only writes the in-memory scratch slot; override_save_slot is what the
+        # game menu's Save does and actually writes Slot_xxxxxxxx.save
+        cmd = 'persistence.override_save_slot %d "%s"' % (slot_id, (name or 'Unnamed').replace('"', "'"))
     out = g.run_cheat(cmd)
-    return {'requested': True, 'command': cmd, 'output': out, 'note': 'save.done event fires when finished'}
+    return {'requested': True, 'command': cmd, 'slot_id': slot_id, 'slot_name': name, 'output': out,
+            'note': 'save.done event fires when the game has written the file'}
+
+
+try:  # remember the real slot as soon as the module loads
+    current_slot()
+except Exception:
+    pass
 
 
 @op('persistence.info', doc='Save slot info and whether saving is locked.')
@@ -423,9 +454,10 @@ def persistence_info():
     ps = services.get_persistence_service()
     out = {'save_locked': bool(ps.is_save_locked())}
     try:
-        slot = ps.get_save_slot_proto_buff()
-        out['slot_id'] = int(slot.slot_id)
-        out['slot_name'] = slot.slot_name
+        slot_id, name = current_slot()
+        out['slot_id'] = slot_id
+        out['slot_name'] = name
+        out['file'] = 'Slot_%08x.save' % slot_id if slot_id else None
     except Exception:
         pass
     return out

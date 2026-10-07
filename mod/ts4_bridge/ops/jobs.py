@@ -20,6 +20,25 @@ from ts4_bridge.util import lookup as L
 # survives source hot-reloads
 _offers = globals().setdefault('_offers', {})  # sim_id -> offer dict
 _hooked = globals().setdefault('_hooked', False)
+_element_hooked = globals().setdefault('_element_hooked', False)
+# interaction ids the agent pushed; their career panels are captured but not sent to the screen
+_agent_interactions = globals().setdefault('_agent_interactions', [])
+
+
+def mark_agent_interaction(interaction):
+    try:
+        iid = int(interaction.id)
+    except Exception:
+        return
+    _agent_interactions.append(iid)
+    del _agent_interactions[:-200]
+
+
+def _is_agent(interaction):
+    try:
+        return interaction is not None and int(interaction.id) in _agent_interactions
+    except Exception:
+        return False
 
 JOIN, QUIT = 'join', 'quit'
 
@@ -100,7 +119,7 @@ def install_hooks():
     """Wrap Career.get_join_career_pb / get_quit_career_pb (static methods) to record what the game
     offers. Idempotent; returns True once installed."""
     if globals().get('_hooked'):
-        return True
+        return _install_element_hook()
     try:
         from careers.career_tuning import Career
     except Exception as e:
@@ -124,6 +143,53 @@ def install_hooks():
         setattr(Career, name, make(func, source))
     globals()['_hooked'] = True
     log('career offer hooks installed')
+    return _install_element_hook()
+
+
+def _install_element_hook():
+    """When the agent runs Find a Job / Quit Job, build the career panel (captured by the hooks above)
+    without sending it to the player's screen, where nothing would ever close it. Same logic as
+    CareerSelectElement._do_behavior minus the Distributor.add_op."""
+    if globals().get('_element_hooked'):
+        return True
+    try:
+        from careers.career_tuning import Career, CareerSelectElement
+        from careers import career_ops
+    except Exception as e:
+        log('career element hook unavailable: %r' % (e,))
+        return False
+    orig = CareerSelectElement._do_behavior
+    if getattr(orig, '_ts4_bridge_wrapped', False):
+        globals()['_element_hooked'] = True
+        return True
+
+    def _do_behavior(self, *args, **kwargs):
+        if not _is_agent(getattr(self, 'interaction', None)):
+            return orig(self, *args, **kwargs)
+        try:
+            participants = self.interaction.get_participants(self.subject)
+            sim = next(iter(participants)) if participants else None
+            sim_info = getattr(sim, 'sim_info', sim)
+            if sim_info is None:
+                return orig(self, *args, **kwargs)
+            if self.career_op == career_ops.CareerOps.JOIN_CAREER:
+                num = Career.NUM_CAREERS_PER_DAY
+                if self.interaction.debug or self.interaction.cheat:
+                    num = 0
+                Career.get_join_career_pb(sim_info, num_careers_to_show=num,
+                                          default_career_selection_data=self._get_default_selection_data())
+                return None
+            if self.career_op == career_ops.CareerOps.QUIT_CAREER and                     len(sim_info.career_tracker.get_quittable_careers()) != 1:
+                Career.get_quit_career_pb(sim_info)
+                return None
+        except Exception as e:
+            log('agent career element failed, falling back to the game UI: %r' % (e,))
+        return orig(self, *args, **kwargs)
+
+    _do_behavior._ts4_bridge_wrapped = True
+    CareerSelectElement._do_behavior = _do_behavior
+    globals()['_element_hooked'] = True
+    log('career panel suppression for agent-driven job searches installed')
     return True
 
 

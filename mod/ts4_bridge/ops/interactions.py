@@ -270,6 +270,8 @@ def _enqueue_result(res, sim, aff):
         inter = res.interaction
         if inter is not None:
             out['interaction_id'] = inter.id
+            from ts4_bridge.ops import jobs
+            jobs.mark_agent_interaction(inter)
     except Exception:
         pass
     if not res:

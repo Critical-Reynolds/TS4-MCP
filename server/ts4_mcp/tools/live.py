@@ -14,7 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from ts4_mcp.server import DANGEROUS, MUTATING, READ_ONLY, _fmt, bridge_call, mcp
 
 NOTABLE_EVENTS = {
-    "interaction.finished", "dialog.shown", "career.offers", "career.quit_choices", "sim.died", "sim.aged", "sim.born", "zone.loaded", "save.done",
+    "interaction.finished", "dialog.shown", "career.offers", "career.quit_choices", "phone.ringing", "sim.died", "sim.aged", "sim.born", "zone.loaded", "save.done",
     "career.workday_complete", "sim.skill_level", "situation.started", "household.changed", "sim.ready_to_age",
 }
 
@@ -140,8 +140,10 @@ async def pending_dialogs() -> str:
 @mcp.tool(annotations=MUTATING)
 async def respond_dialog(dialog_id: int | str, response_id: str = "ok", picked: list[str] | None = None,
                          text: str = "") -> str:
-    """Answer an open dialog. response_id: a button's response_id, or ok|cancel|close. For pickers pass
-    picked=[option_id,...]. For text prompts pass text."""
+    """Answer an open dialog the way the player would click it; the window closes on screen.
+    response_id: a button's response_id, or ok|cancel|close. Phone calls: ok to accept, cancel to decline.
+    Pickers (Invite Over, Chat With, Travel...): picked=["Martha"] or sim ids / option_ids from picker_rows;
+    the picks are selected and confirmed with OK in one call. Text prompts: pass text."""
     args: dict[str, Any] = {"dialog_id": int(dialog_id), "response_id": response_id}
     if picked:
         args["picked"] = picked
@@ -250,7 +252,8 @@ async def wait(sim_minutes: int = 60, max_seconds: int = 20, speed: str = "ultra
                 reason = "sim_minutes_elapsed"
                 break
             if now.get("paused"):
-                reason = "game_paused_externally"
+                reason = ("paused_by_player_screen: " + now.get("pause_note", "")
+                          if now.get("paused_by_player_screen") else "game_paused_externally")
                 break
             if ctx is not None and time.monotonic() - last_progress >= 10:
                 last_progress = time.monotonic()
