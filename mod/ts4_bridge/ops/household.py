@@ -121,10 +121,14 @@ def career_list_available(query=None, limit=60):
 
 
 @op('career.action', doc="action: join|quit|promote|demote|add_pto|retire. career is a tuning name/id (needed for join).")
-def career_action(action, sim_id='active', career=None, levels=1):
+def career_action(action, sim_id='active', career=None, levels=1, allow_cheat=False):
     g.require_zone()
     info = L.sim_info(sim_id)
     tracker = info.career_tracker
+    if action in ('join', 'promote', 'demote') and not allow_cheat:
+        raise OpError('%s is a cheat. A player finds work with Find a Job on the phone or a computer '
+                      '(then jobs.offers / jobs.accept) and earns promotions by working. Pass '
+                      'allow_cheat=true only when the goal explicitly permits cheating.' % action)
     def _current():
         return [{'name': L.tuning_name(type(x)), 'level': int(x.level), 'user_level': int(x.user_level)}
                 for x in tracker.careers.values()]

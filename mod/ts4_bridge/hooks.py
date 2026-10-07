@@ -72,6 +72,7 @@ class _Handler(object):
                         return
                     data['interaction_id'] = getattr(inter, 'id', None)
                     data['affordance'] = aff_name
+                    data['user_directed'] = bool(getattr(inter, 'is_user_directed', False))
                     try:
                         t = inter.target
                         data['target_id'] = t.id if t is not None else None
@@ -130,6 +131,7 @@ def _register_events(mgr):
     so this runs again after every lot change."""
     from event_testing.test_events import TestEvent
     handler = globals().get('_handler') or _Handler()
+    handler.__class__ = _Handler  # a hot reload defines a new class; run its handle_event, not the old one
     types = []
     for n in WATCHED:
         t = getattr(TestEvent, n, None)
@@ -139,6 +141,18 @@ def _register_events(mgr):
     globals()['_handler'] = handler
     globals()['_mgr_id'] = id(mgr)
     return len(types)
+
+
+def _handler_registered(mgr):
+    """The event manager object survives lot changes but its listeners are cleared, so check membership
+    rather than comparing manager identity."""
+    handler = globals().get('_handler')
+    if handler is None:
+        return False
+    try:
+        return any(handler in listeners for listeners in mgr._test_event_callback_map.values())
+    except Exception:
+        return id(mgr) == globals().get('_mgr_id')
 
 
 def install():
@@ -194,7 +208,7 @@ def _install_zone_hooks():
             # make sure the event handler is on the new zone's event manager right away
             try:
                 mgr = services.get_event_manager()
-                if mgr is not None and id(mgr) != globals().get('_mgr_id'):
+                if mgr is not None and not _handler_registered(mgr):
                     _register_events(mgr)
             except Exception:
                 pass
@@ -256,11 +270,14 @@ def ensure_installed_on_tick():
         install()
         return
     _install_zone_hooks()  # idempotent; picks up hooks added by a source reload
+    handler = globals().get('_handler')
+    if handler is not None and type(handler) is not _Handler:
+        handler.__class__ = _Handler  # same registered object, current code
     try:
         mgr = services.get_event_manager()
     except Exception:
         return
-    if mgr is None or id(mgr) == globals().get('_mgr_id'):
+    if mgr is None or _handler_registered(mgr):
         return
     try:
         count = _register_events(mgr)

@@ -283,7 +283,8 @@ def wake_check(needs=None, speed=None):
             except Exception:
                 pass
         sleeping = any('sleep' in n.lower() for n in running)
-        active.update({'idle': not directed, 'directed': directed[:5], 'sleeping': sleeping})
+        active.update({'idle': not directed, 'directed': directed[:5], 'sleeping': sleeping,
+                       'mood': mood_brief(info).get('mood')})
         mot = {k: v['value'] for k, v in motives(info).items() if isinstance(v, dict)}
         active['motives'] = {k: round(v, 1) for k, v in mot.items()}
         active['below'] = sorted(k for k, t in (needs or {}).items() if k in mot and mot[k] < float(t))

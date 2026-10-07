@@ -10,7 +10,7 @@ How to play
   the wrong (or a nonexistent) lot or object. Traveling to a rounded zone id hangs the loading screen.
 - Act through interactions: `list_objects` to find targets, `list_interactions(sim, target, query)` for
   what is possible right now (ids + English names), `do_interaction` to queue it. Social actions target
-  another sim's id. `cancel_interactions` clears the queue.
+  another sim's id. The cell phone is `target_id="phone"` (jobs, calls, texts, invites, delivery). `cancel_interactions` clears the queue.
 - Time only advances while unpaused. `wait` runs the clock and returns early on notable events or
   dialogs, then pauses. For long stretches use one long wait that wakes you only when a decision is
   needed: `wait(sim_minutes=1440, max_seconds=900, speed="auto", wake_on=["idle", "needs", "sellable",
@@ -22,7 +22,9 @@ How to play
 
 Household and life
 - `list_sims`, `sim_details(sections=...)`, `set_active_sim`, `create_sim`, `move_sim_to_household`,
-  `rename_sim`, `set_outfit`. Careers: `career_options`, `career(join|quit|promote|demote)`. Traits:
+  `rename_sim`, `set_outfit`. Jobs: find work like a player, with Find a Job on the phone
+  (`list_interactions(target_id="phone", query="career")`) or a computer, then `job_offers` and
+  `accept_job`. Only the day's offered jobs can be taken; never pick a career from `career_options`. Traits:
   `trait_options`, `set_trait`. World: `list_lots`, `travel`, `move_household_to_lot`, `lot_value`.
 - Cheats exist (`household_funds(delta)`, `set_skill`, `set_motive`, `modify_relationship`, `age_up`,
   `cheat(command)`) and are marked destructive. Use them only when the player's goal permits cheating;

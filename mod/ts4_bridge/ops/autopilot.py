@@ -192,11 +192,18 @@ def _paint(sim):
     if easel is None:
         return False
     ctx = I.make_context(sim, target=easel)
-    aop = next((a for a in I.all_aops(sim, easel, ctx) if L.tuning_name(a.affordance).endswith('easel_StartCrafting')), None)
-    if aop is None:
+    recipes = {}  # recipe name -> (recipe, picker-row aop); the easel has one row per group of styles
+    for a in I.all_aops(sim, easel, ctx):
+        if L.tuning_name(a.affordance).endswith('easel_StartCrafting') and getattr(a, '_ts4_result', None):
+            for r in (a.interaction_parameters.get('recipe_ingredients_map') or {}).keys():
+                recipes.setdefault(L.tuning_name(r), (r, a))
+    choice = recipes.get(_state['cfg']['recipe']) or recipes.get('recipe_Painting_Classics')
+    if choice is None:
+        _log('no paint recipe available (wanted %s)' % _state['cfg']['recipe'])
         return False
-    recipes = {L.tuning_name(r): r for r in aop.interaction_parameters['recipe_ingredients_map'].keys()}
-    recipe = recipes.get(_state['cfg']['recipe']) or recipes.get('recipe_Painting_Classics')
+    recipe, aop = choice
+    if L.tuning_name(recipe) != _state['cfg']['recipe']:
+        _log('recipe %s unavailable, painting %s' % (_state['cfg']['recipe'], L.tuning_name(recipe)))
     si = aop.interaction_factory(I.make_context(sim, target=easel, insert='last')).interaction
     ok = bool(si.on_choice_selected(recipe))
     if ok:

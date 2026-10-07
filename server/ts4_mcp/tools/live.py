@@ -14,7 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from ts4_mcp.server import DANGEROUS, MUTATING, READ_ONLY, _fmt, bridge_call, mcp
 
 NOTABLE_EVENTS = {
-    "interaction.finished", "dialog.shown", "sim.died", "sim.aged", "sim.born", "zone.loaded", "save.done",
+    "interaction.finished", "dialog.shown", "career.offers", "career.quit_choices", "sim.died", "sim.aged", "sim.born", "zone.loaded", "save.done",
     "career.workday_complete", "sim.skill_level", "situation.started", "household.changed", "sim.ready_to_age",
 }
 
@@ -71,9 +71,10 @@ async def sim_details(sim_id: str = "active", sections: list[str] | None = None)
 @mcp.tool(annotations=READ_ONLY)
 async def list_interactions(sim_id: str = "active", target_id: str = "self", query: str = "",
                             only_runnable: bool = True, limit: int = 60) -> str:
-    """Interactions a sim can do right now on a target ('self', an object id from list_objects, or another
-    sim's id). Each entry has an affordance_id for do_interaction. query filters by name substring
-    (e.g. 'paint', 'sleep', 'cook')."""
+    """Interactions a sim can do right now on a target: 'self', 'phone' (the cell phone menu: Find a Job,
+    Quit Job, call/text sims, order delivery, invite over, travel...), an object id from list_objects, or
+    another sim's id. Each entry has an affordance_id for do_interaction (pass the same target_id).
+    query filters by name substring (e.g. 'paint', 'sleep', 'cook', 'career')."""
     args: dict[str, Any] = {"sim_id": sim_id, "target_id": target_id, "only_runnable": only_runnable, "limit": limit}
     if query:
         args["query"] = query
@@ -83,8 +84,8 @@ async def list_interactions(sim_id: str = "active", target_id: str = "self", que
 @mcp.tool(annotations=MUTATING)
 async def do_interaction(affordance_id: str, sim_id: str = "active", target_id: str = "self",
                          priority: str = "high", insert: str = "next") -> str:
-    """Queue an interaction (affordance_id or tuning name from list_interactions) for a sim on a target.
-    priority: low|high|critical. insert: next|first|last. Returns the enqueue result and queue."""
+    """Queue an interaction (affordance_id or tuning name from list_interactions) for a sim on a target
+    ('self', 'phone', an object id or a sim id; use the target_id it was listed under). priority: low|high|critical. insert: next|first|last. Returns the enqueue result and queue."""
     return _fmt(await _localized("interactions.push", {"affordance_id": affordance_id, "sim_id": sim_id,
                                                         "target_id": target_id, "priority": priority,
                                                         "insert": insert}))
@@ -151,7 +152,16 @@ async def respond_dialog(dialog_id: int | str, response_id: str = "ok", picked: 
 
 MAX_WAIT_SECONDS = int(os.environ.get("TS4_MAX_WAIT_SECONDS", "1800"))
 DEFAULT_WAKE_NEEDS = {"Bladder": -40, "Hunger": -30, "Energy": -60, "Hygiene": -50, "Social": -60, "Fun": -60}
-WAKE_TRIGGERS = ("idle", "needs", "sellable", "home", "left", "awake")
+WAKE_TRIGGERS = ("idle", "needs", "sellable", "home", "left", "awake", "step", "mood")
+NEGATIVE_MOODS = {"Mood_Angry", "Mood_Sad", "Mood_Tense", "Mood_Stressed", "Mood_Embarrassed",
+                  "Mood_Uncomfortable", "Mood_Bored", "Mood_Dazed", "Mood_Scared"}
+
+
+def _is_step(ev: dict[str, Any], active_id: Any) -> bool:
+    """A user-directed interaction (including a queued social) of the active sim just finished."""
+    data = ev.get("data") or {}
+    return (ev.get("name") == "interaction.finished" and data.get("user_directed")
+            and str(data.get("sim_id")) == str(active_id))
 
 
 def _wake_reasons(prev: dict[str, Any], cur: dict[str, Any], wake_on: set[str]) -> list[str]:
@@ -172,6 +182,8 @@ def _wake_reasons(prev: dict[str, Any], cur: dict[str, Any], wake_on: set[str]) 
         out.extend(f"need:{m}" for m in sorted(newly))
     if "sellable" in wake_on and len(cur.get("sellable") or []) > len(prev.get("sellable") or []):
         out.append("sellable")
+    if "mood" in wake_on and ca.get("mood") in NEGATIVE_MOODS and pa.get("mood") != ca.get("mood"):
+        out.append(f"mood:{ca.get('mood')}")
     return out
 
 
@@ -186,7 +198,10 @@ async def wait(sim_minutes: int = 60, max_seconds: int = 20, speed: str = "ultra
     `until_events` fires (interaction.finished, career.workday_complete, sim.skill_level...), or a `wake_on`
     trigger fires: idle (stopped doing anything you directed), needs (a motive fell below `needs`
     thresholds, e.g. {"Hunger": -30}), sellable (a painting finished), home / left (arrived on / left the
-    lot), awake (woke up). Use long waits with wake_on so you only act when a decision is needed."""
+    lot), awake (woke up), step (an interaction/social you queued finished; the reason carries its
+    affordance and outcome), mood (the sim's mood turned negative: angry, sad, stressed, embarrassed...).
+    Use long waits with wake_on so you only act when a decision is needed; for socials and anything
+    you are steering closely, include "step" and "mood" instead of guessing a duration."""
     client = get_client()
     wake = set(wake_on or [])
     unknown = wake - set(WAKE_TRIGGERS)
@@ -206,12 +221,19 @@ async def wait(sim_minutes: int = 60, max_seconds: int = 20, speed: str = "ultra
     reason = "timeout"
     fired: list[str] = []
     watch = set(until_events or []) | ({"dialog.shown"} if stop_on_dialog else set())
+    active_id = ((prev or {}).get("active") or {}).get("sim_id")
+    want_step = "step" in wake and active_id is not None
     try:
         while time.monotonic() < deadline:
             remaining = deadline - time.monotonic()
-            ev = await client.wait_for_event(lambda e: e.get("name") in watch, timeout=min(1.0, max(0.05, remaining)))
+            ev = await client.wait_for_event(lambda e: e.get("name") in watch or (want_step and _is_step(e, active_id)),
+                                             timeout=min(1.0, max(0.05, remaining)))
             if ev is not None:
-                reason = f"event:{ev.get('name')}"
+                if ev.get("name") in watch:
+                    reason = f"event:{ev.get('name')}"
+                else:
+                    d = ev.get("data") or {}
+                    reason = f"wake:step:{d.get('affordance')}:{d.get('outcome')}"
                 break
             if use_wake:
                 cur = await bridge_call("wake.check", poll_args)

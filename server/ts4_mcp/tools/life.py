@@ -57,40 +57,39 @@ async def lot_value(zone_id: int | str) -> str:
 
 
 @mcp.tool(annotations=MUTATING)
-async def travel(zone_id: int | str, sim_ids: list[str] | None = None, wait_seconds: int = 20) -> str:
+async def travel(zone_id: int | str, sim_ids: list[str] | None = None, wait_seconds: int = 180) -> str:
     """Travel to another lot (the active sim, or the given sims together). Shows a loading screen; this
-    tool waits up to wait_seconds for the new lot to load and returns a snapshot."""
-    client = get_client()
+    tool returns as soon as the destination lot is running with the active sim on it (or after
+    wait_seconds, max 600), with a snapshot. Pass zone_id as a string."""
     zone_id = int(zone_id)
     args: dict[str, Any] = {"zone_id": zone_id}
     if sim_ids:
         args["sim_ids"] = sim_ids
     res = await bridge_call("world.travel", args)
     import time
-    deadline = time.monotonic() + max(1, min(wait_seconds, 25))
-    loaded = False
+    deadline = time.monotonic() + max(1, min(int(wait_seconds), 600))
+    arrived = False
     while time.monotonic() < deadline:
-        ev = await client.wait_for_event(lambda e: e.get("name") == "zone.loaded",
-                                         timeout=min(2.0, max(0.1, deadline - time.monotonic())))
-        if ev is not None:
-            loaded = True
-            break
-        try:  # polling fallback: the zone id changing and running is as good as the event
+        # Readiness is checked directly instead of waiting on zone.loaded: the event can be missed while
+        # the bridge reconnects, and it fires before the travelling sims are placed on the lot.
+        try:
             info = await bridge_call("bridge.info", timeout=5.0)
             if info.get("zone_id") == zone_id and info.get("zone_running"):
-                loaded = True
-                break
+                chk = await bridge_call("wake.check", {}, timeout=5.0)
+                if (chk.get("active") or {}).get("on_lot"):
+                    arrived = True
+                    break
         except Exception:
-            pass
-    out: dict[str, Any] = {"travel": res, "loaded": loaded}
-    if loaded:
+            pass  # loading screen: the bridge is busy or reconnecting
         await asyncio.sleep(1.0)
+    out: dict[str, Any] = {"travel": res, "arrived": arrived}
+    if arrived:
         try:
             out["snapshot"] = await _localized("state.snapshot", {"include_buffs": False})
         except Exception as e:  # zone may still be settling
             out["snapshot_error"] = str(e)
     else:
-        out["hint"] = "Still loading; call look in a few seconds."
+        out["hint"] = "Not there yet; call look. If the lot loaded without the sim, travel again from its home lot."
     return _fmt(out)
 
 
@@ -104,19 +103,46 @@ async def save_game(new_slot: bool = False, wait_seconds: int = 15) -> str:
 
 
 @mcp.tool(annotations=READ_ONLY)
+async def job_offers(sim_id: str = "active") -> str:
+    """The job openings the game showed this sim the last time they used Find a Job on their phone or a
+    computer: career, title, level, hourly pay, schedule, and whether it can be taken. This is how a player
+    finds work. To get offers: list_interactions(target_id="phone", query="career") for the phone's
+    Find a Job (phone_JoinCareer), or on a computer object (computer_JoinCareer), do_interaction, then
+    call this. The game shows only a few openings per day, like it does for a player."""
+    return _fmt(await _localized("jobs.offers", {"sim_id": sim_id}))
+
+
+@mcp.tool(annotations=MUTATING)
+async def accept_job(career_id: int | str, sim_id: str = "active", track_id: int | str | None = None,
+                     shift: str = "ALL_DAY") -> str:
+    """Take one of the jobs from job_offers (career_id, and track_id if the same career appears twice).
+    shift ALL_DAY|MORNING|EVENING|NIGHT for part-time jobs. Only offered jobs can be taken. After a
+    Quit Job interaction with several careers, the same call quits the chosen one. Answer any
+    confirmation dialog the game raises."""
+    args: dict[str, Any] = {"career_id": int(career_id), "sim_id": sim_id, "shift": shift}
+    if track_id is not None:
+        args["track_id"] = int(track_id)
+    return _fmt(await _localized("jobs.accept", args))
+
+
+@mcp.tool(annotations=READ_ONLY)
 async def career_options(query: str = "") -> str:
-    """Career tuning names available to join (filter by substring, e.g. 'painter', 'tech', 'culinary')."""
+    """Reference list of every career tuning in the game (filter by substring). This is not a job board:
+    to actually find work use Find a Job and job_offers like a player."""
     args: dict[str, Any] = {}
     if query:
         args["query"] = query
     return _fmt(await _localized("career.list_available", args))
 
 
-@mcp.tool(annotations=MUTATING)
-async def career(action: str, sim_id: str = "active", career_name: str = "", levels: int = 1) -> str:
-    """Manage a sim's career. action: join (career_name required, from career_options) | quit | promote |
-    demote | retire. Promote/demote are cheats; normally let the sim earn promotions by working."""
-    args: dict[str, Any] = {"action": action, "sim_id": sim_id, "levels": levels}
+@mcp.tool(annotations=DANGEROUS)
+async def career(action: str, sim_id: str = "active", career_name: str = "", levels: int = 1,
+                 allow_cheat: bool = False) -> str:
+    """Career cheats and shortcuts. action: quit | retire | join | promote | demote. join, promote and demote
+    bypass normal play and are refused unless allow_cheat=true, which you may only set when the player's
+    goal explicitly allows cheating. Normal play: find work with job_offers/accept_job, earn promotions by
+    going to work in a good mood and building the career's skills, quit with Quit Job on the phone."""
+    args: dict[str, Any] = {"action": action, "sim_id": sim_id, "levels": levels, "allow_cheat": allow_cheat}
     if career_name:
         args["career"] = career_name
     return _fmt(await _localized("career.action", args))

@@ -52,7 +52,24 @@ def make_context(sim, priority='high', source='pie_menu', insert='next', target=
                               insert_strategy=strategy, pick=pick)
 
 
-def all_aops(sim, target, context):
+PHONE_TARGETS = ('phone', 'cellphone', 'cell_phone')
+
+
+def is_phone(target_id):
+    return isinstance(target_id, str) and target_id.lower() in PHONE_TARGETS
+
+
+def phone_context(sim, priority='high'):
+    """Context the game uses for the phone menu (interactions.phone_choices): client context, no pick."""
+    client = g.first_client()
+    if client is None:
+        raise OpError('no client; the phone needs the active player client')
+    ctx = client.create_interaction_context(sim)
+    ctx.priority = PRIORITIES.get(str(priority).lower(), _prio.Priority.High)
+    return ctx
+
+
+def all_aops(sim, target, context, phone=False):
     """Everything the pie menu would show for `sim` clicking `target`: super affordances, their
     sub-menu mixers (Friendly/Funny/Romance socials live here under sim_Chat), and mixers of the
     sim's currently running interactions. Mixer AOPs carry a precomputed test result in
@@ -60,7 +77,12 @@ def all_aops(sim, target, context):
     seen = set()
 
     def _emit(aop, result=None, parent=None):
-        key = (L.guid(aop.affordance), getattr(aop.target, 'id', None), L.guid(parent) if parent is not None else None)
+        # picker rows share one affordance and differ only in their parameters (e.g. one easel row per
+        # group of painting styles), so the parameters are part of the identity
+        params = tuple(sorted((k, id(v)) for k, v in (aop.interaction_parameters or {}).items()
+                              if k not in ('affordance_list',)))
+        key = (L.guid(aop.affordance), getattr(aop.target, 'id', None), L.guid(parent) if parent is not None else None,
+               params)
         if key in seen:
             return None
         seen.add(key)
@@ -70,7 +92,8 @@ def all_aops(sim, target, context):
             aop._ts4_super = parent
         return aop
 
-    for aop in target.potential_interactions(context):
+    source = sim.potential_phone_interactions(context) if phone else target.potential_interactions(context)
+    for aop in source:
         try:
             result = aop.test(context)
         except Exception as e:
@@ -94,6 +117,8 @@ def all_aops(sim, target, context):
                     yield out
         except Exception:
             continue
+    if phone:
+        return
     # mixers of running SIs whose potential targets include `target` (same as the pie menu)
     try:
         from autonomy import content_sets
@@ -167,15 +192,17 @@ def interactions_list(sim_id='active', target_id='self', query=None, only_runnab
                       include_autonomous=False):
     g.require_zone()
     info, sim = L.sim_instance(sim_id)
-    target = L.resolve_target(sim, target_id)
-    context = make_context(sim, target=target)
+    phone = is_phone(target_id)
+    target = sim if phone else L.resolve_target(sim, target_id)
+    context = phone_context(sim) if phone else make_context(sim, target=target)
     seen = set()
     out = []
     q = str(query).lower() if query else None
     total = 0
-    for aop in all_aops(sim, target, context):
+    for aop in all_aops(sim, target, context, phone=phone):
         aff = aop.affordance
-        key = (L.guid(aff), getattr(aop.target, 'id', None), L.guid(getattr(aop, '_ts4_super', None)))
+        key = (L.guid(aff), getattr(aop.target, 'id', None), L.guid(getattr(aop, '_ts4_super', None)),
+               tuple(sorted((k, id(v)) for k, v in (aop.interaction_parameters or {}).items() if k != 'affordance_list')))
         if key in seen:
             continue
         seen.add(key)
@@ -191,7 +218,7 @@ def interactions_list(sim_id='active', target_id='self', query=None, only_runnab
         out.append(d)
         if len(out) >= int(limit):
             break
-    return {'sim_id': info.sim_id, 'target_id': getattr(target, 'id', None), 'count': len(out),
+    return {'sim_id': info.sim_id, 'target_id': 'phone' if phone else getattr(target, 'id', None), 'count': len(out),
             'scanned': total, 'interactions': out}
 
 
@@ -200,8 +227,19 @@ def interactions_list(sim_id='active', target_id='self', query=None, only_runnab
 def interactions_push(affordance_id, sim_id='active', target_id='self', priority='high', insert='next'):
     g.require_zone()
     info, sim = L.sim_instance(sim_id)
-    target = L.resolve_target(sim, target_id)
     aff = L.affordance_by_id(affordance_id)
+    if is_phone(target_id):
+        # exactly what selecting an item in the phone menu does: test_and_execute the phone AOP
+        context = phone_context(sim, priority)
+        candidates = [a for a in all_aops(sim, sim, context, phone=True) if a.affordance is aff]
+        candidates.sort(key=lambda a: 0 if getattr(a, '_ts4_result', None) else 1)
+        if not candidates:
+            raise OpError('%s is not on the phone right now' % L.tuning_name(aff))
+        res = candidates[0].test_and_execute(context)
+        out = _enqueue_result(res, sim, aff)
+        out['via'] = 'phone'
+        return out
+    target = L.resolve_target(sim, target_id)
     context = make_context(sim, priority=priority, source='pie_menu', insert=insert, target=target)
     is_super = getattr(aff, 'is_super', True)
     if callable(is_super):

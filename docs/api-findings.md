@@ -111,3 +111,12 @@ Confirmed live via `run_python` unless marked "reference only".
 - MCP SDK 2.3 masks the text of any exception that isn't `ToolError` ("Error executing tool X" only), so
   `bridge_call` must raise `ToolError` for bridge errors to reach the model.
 - Windows placed this way pass the legality test and are charged. The visual wall cutout was not yet verified.
+
+## Jobs the player way (confirmed live)
+- Phone actions are not in the sim's pie menu. The phone menu is `sim.potential_phone_interactions(client.create_interaction_context(sim))`
+  (what `interactions.phone_choices` builds); exposed as `target_id="phone"`. Find a Job is `phone_JoinCareer` (13787),
+  Quit Job `phone_QuitCareer`; computers offer `computer_JoinCareer` (13223). There is no newspaper job search in this game version.
+- Find a Job runs a loot op that calls `Career.get_join_career_pb` and sends `SELECT_CAREER_UI` to the client. We wrap that
+  static method to capture the offered careers (career, track, level, pay, selectable).
+- The client answers with `careers.select sim career track level company reason shift`; `jobs.accept` calls the same
+  `select_career` function, and only for an offered career. Direct `career_tracker.add_career` is now a gated cheat.
