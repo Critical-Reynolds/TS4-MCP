@@ -384,14 +384,22 @@ def world_travel(zone_id, sim_ids=None):
     else:
         infos = [services.active_sim_info()]
     lead = infos[0]
-    for extra in infos[1:]:
-        try:
-            extra.inject_into_inactive_zone(int(zone_id))
-        except Exception as e:
-            log('inject_into_inactive_zone failed for %s: %r' % (extra.sim_id, e))
     events.emit('zone.loading', {'to_zone_id': int(zone_id)}, sim_ts=g.sim_now_string())
-    lead.send_travel_switch_to_zone_op(zone_id=int(zone_id))
-    return {'requested': True, 'zone_id': int(zone_id), 'sim_ids': [i.sim_id for i in infos]}
+    if all(i.is_instanced() for i in infos):
+        # The map's travel: the sims leave this lot and are placed on the destination. A bare
+        # switch-zone op only moves the camera, leaving the sims behind on their old lot.
+        from world.travel_service import travel_sims_to_zone
+        travel_sims_to_zone([i.sim_id for i in infos], int(zone_id))
+        method = 'travel_sims_to_zone'
+    else:
+        for extra in infos[1:]:
+            try:
+                extra.inject_into_inactive_zone(int(zone_id))
+            except Exception as e:
+                log('inject_into_inactive_zone failed for %s: %r' % (extra.sim_id, e))
+        lead.send_travel_switch_to_zone_op(zone_id=int(zone_id))
+        method = 'switch_to_zone'
+    return {'requested': True, 'zone_id': int(zone_id), 'sim_ids': [i.sim_id for i in infos], 'method': method}
 
 
 @op('persistence.save', doc='Save the game to the current slot (or a new slot). Fails while saving is locked.')
