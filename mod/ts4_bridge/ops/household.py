@@ -90,6 +90,7 @@ def household_move_into_zone(zone_id, household_id=None, furnished=True):
     hh = services.household_manager().get(int(household_id)) if household_id else services.active_household()
     if hh is None:
         raise OpError('no household')
+    _require_known_zone(zone_id)
     venue = services.venue_service().get_venue_tuning(int(zone_id))
     if venue is None or not (venue.is_residential or getattr(venue, 'is_university_housing', False)):
         raise OpError('target zone is not residential')
@@ -354,7 +355,14 @@ def world_lots(residential_only=False, unowned_only=False, world_id=None, limit=
     return {'count': len(out), 'current_zone_id': services.current_zone_id(), 'lots': out}
 
 
-@op('world.lot_value', doc='Furnished and unfurnished value of a lot (zone).')
+def _require_known_zone(zone_id):
+    """A zone id missing from the save makes the client load forever, so refuse it up front."""
+    if services.get_persistence_service().get_zone_proto_buff(int(zone_id)) is None:
+        raise OpError('zone %s is not in this save (mistyped or rounded id? pass ids as strings; '
+                      'see list_lots)' % (zone_id,))
+
+
+@op('world.lot_value',doc='Furnished and unfurnished value of a lot (zone).')
 def world_lot_value(zone_id):
     import build_buy
     try:
@@ -368,6 +376,7 @@ def world_lot_value(zone_id):
                         'the connection survives, poll look until zone.loaded.')
 def world_travel(zone_id, sim_ids=None):
     g.require_zone()
+    _require_known_zone(zone_id)
     if int(zone_id) == services.current_zone_id():
         raise OpError('already on that lot')
     if sim_ids:
