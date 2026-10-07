@@ -189,6 +189,32 @@ async def buy_into_slot(parent_id: int, def_id: int, slot: str = "", free: bool 
     return _fmt(await _localized("objects.buy_into_slot", args))
 
 
+@mcp.tool(annotations=MUTATING)
+async def autopilot_start(activity: str = "paint", recipe: str = "", interval: int = 10, fast: bool = True,
+                          auto_dialogs: bool = True, pay_bills: bool = True) -> str:
+    """Run the active sim on an in-game money loop until stopped: keeps needs up (toilet, food, shower,
+    sleep 22:00-06:00), paints at the easel (recipe tuning name, default Classics) and sells finished
+    paintings, pays bills, answers routine dialogs with their first option, and keeps the clock running
+    (super speed while asleep or at work). Then check in with autopilot_status instead of wait."""
+    args: dict[str, Any] = {"activity": activity, "interval": interval, "fast": fast,
+                            "auto_dialogs": auto_dialogs, "pay_bills": pay_bills}
+    if recipe:
+        args["recipe"] = recipe
+    return _fmt(await _localized("autopilot.start", args))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def autopilot_status(log_lines: int = 15) -> str:
+    """Autopilot counters (paintings sold, earnings, bills, dialogs, errors), recent decisions and funds."""
+    return _fmt(await _localized("autopilot.status", {"log_lines": log_lines}))
+
+
+@mcp.tool(annotations=MUTATING)
+async def autopilot_stop(pause: bool = True) -> str:
+    """Stop the autopilot (and pause the game unless pause=false)."""
+    return _fmt(await _localized("autopilot.stop", {"pause": pause}))
+
+
 @mcp.tool(annotations=DANGEROUS)
 async def sell_object(object_id: int) -> str:
     """Sell (delete) an object and credit its current value to the household."""

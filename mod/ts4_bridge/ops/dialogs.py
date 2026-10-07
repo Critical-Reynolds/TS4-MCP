@@ -43,7 +43,10 @@ def dialog_brief(dialog, include_responses=True):
     if include_responses:
         resp = []
         try:
-            for r in dialog.responses:
+            # adventure moments / preference prompts pass their buttons to show_dialog as
+            # additional responses (ids are action indexes), so `responses` alone can be empty
+            extra = tuple(getattr(dialog, '_additional_responses', None) or ())
+            for r in tuple(dialog.responses or ()) + extra:
                 rd = {'response_id': int(r.dialog_response_id)}
                 try:
                     rd['text'] = L.loc(r.text) if not callable(r.text) else L.loc(r.text())
