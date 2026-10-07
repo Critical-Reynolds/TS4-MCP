@@ -1,0 +1,208 @@
+"""Live-mode tools: observe, act, wait."""
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any
+
+from ts4_mcp import localization as loc
+from ts4_mcp.bridge_client import get_client
+from ts4_mcp.server import DANGEROUS, MUTATING, READ_ONLY, _fmt, bridge_call, mcp
+
+NOTABLE_EVENTS = {
+    "interaction.finished", "dialog.shown", "sim.died", "sim.aged", "sim.born", "zone.loaded", "save.done",
+    "career.workday_complete", "sim.skill_level", "situation.started", "household.changed", "sim.ready_to_age",
+}
+
+
+def _sims_index(snapshot: dict[str, Any]) -> dict[int, str]:
+    out: dict[int, str] = {}
+    hh = snapshot.get("household") or {}
+    for m in hh.get("members") or []:
+        if m.get("sim_id") and m.get("name"):
+            out[m["sim_id"]] = m["name"]
+    a = snapshot.get("active_sim") or {}
+    if a.get("sim_id") and a.get("name"):
+        out[a["sim_id"]] = a["name"]
+    return out
+
+
+async def _localized(op: str, args: dict[str, Any] | None = None, timeout: float = 20.0) -> Any:
+    result = await bridge_call(op, args, timeout=timeout)
+    try:
+        hello = get_client().hello
+        loc.load(hello.get("game_dir"))
+    except Exception:
+        pass
+    return loc.resolve(result)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def look(include_buffs: bool = True, include_members: bool = True) -> str:
+    """Compact snapshot of the game: lot, sim time and speed, active household and funds, the active sim's
+    needs/mood/buffs/queue, selectable sims and any pending dialogs. Your main observation tool."""
+    return _fmt(await _localized("state.snapshot", {"include_buffs": include_buffs, "include_members": include_members}))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def list_sims(scope: str = "household", name_filter: str = "", limit: int = 100, offset: int = 0) -> str:
+    """List sims. scope: household (active household), lot (everyone currently on this lot), selectable,
+    or all (every sim in the save; paginate with limit/offset)."""
+    args: dict[str, Any] = {"scope": scope, "limit": limit, "offset": offset}
+    if name_filter:
+        args["name_filter"] = name_filter
+    return _fmt(await _localized("sims.list", args))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def sim_details(sim_id: str = "active", sections: list[str] | None = None) -> str:
+    """Detailed state of one sim (id or 'active'). sections subset of: identity, motives, mood, buffs,
+    skills, careers, traits, relationships, aspiration, whims, queue, outfit, pregnancy."""
+    args: dict[str, Any] = {"sim_id": sim_id}
+    if sections:
+        args["sections"] = sections
+    return _fmt(await _localized("sims.details", args))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def list_interactions(sim_id: str = "active", target_id: str = "self", query: str = "",
+                            only_runnable: bool = True, limit: int = 60) -> str:
+    """Interactions a sim can do right now on a target ('self', an object id from list_objects, or another
+    sim's id). Each entry has an affordance_id for do_interaction. query filters by name substring
+    (e.g. 'paint', 'sleep', 'cook')."""
+    args: dict[str, Any] = {"sim_id": sim_id, "target_id": target_id, "only_runnable": only_runnable, "limit": limit}
+    if query:
+        args["query"] = query
+    return _fmt(await _localized("interactions.list", args, timeout=25.0))
+
+
+@mcp.tool(annotations=MUTATING)
+async def do_interaction(affordance_id: str, sim_id: str = "active", target_id: str = "self",
+                         priority: str = "high", insert: str = "next") -> str:
+    """Queue an interaction (affordance_id or tuning name from list_interactions) for a sim on a target.
+    priority: low|high|critical. insert: next|first|last. Returns the enqueue result and queue."""
+    return _fmt(await _localized("interactions.push", {"affordance_id": affordance_id, "sim_id": sim_id,
+                                                        "target_id": target_id, "priority": priority,
+                                                        "insert": insert}))
+
+
+@mcp.tool(annotations=MUTATING)
+async def cancel_interactions(sim_id: str = "active", interaction_id: int | None = None) -> str:
+    """Cancel one interaction by id, or everything queued and running for the sim when interaction_id is omitted."""
+    args: dict[str, Any] = {"sim_id": sim_id}
+    if interaction_id is not None:
+        args["interaction_id"] = interaction_id
+    return _fmt(await _localized("interactions.cancel", args))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def list_objects(query: str = "", near_sim_id: str = "", radius: float = 10.0, limit: int = 80,
+                       include_sims: bool = False) -> str:
+    """Objects on the current lot with ids, types, positions and values. query matches the type name
+    ('fridge', 'bed', 'easel', 'computer', 'toilet'). near_sim_id with radius sorts by distance to that sim."""
+    args: dict[str, Any] = {"limit": limit, "include_sims": include_sims, "radius": radius}
+    if query:
+        args["query"] = query
+    if near_sim_id:
+        args["near_sim_id"] = near_sim_id
+    return _fmt(await _localized("objects.list", args))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def object_details(object_id: int) -> str:
+    """Details of one object: definition, owner, states, inventory contents and its super affordances."""
+    return _fmt(await _localized("objects.get", {"object_id": object_id}))
+
+
+@mcp.tool(annotations=MUTATING)
+async def set_active_sim(sim_id: str) -> str:
+    """Switch control to another sim of the active household."""
+    return _fmt(await bridge_call("sims.set_active", {"sim_id": sim_id}))
+
+
+@mcp.tool(annotations=MUTATING)
+async def set_speed(speed: str) -> str:
+    """Set the game clock: paused | normal | fast | ultra | super (super = 'sims away' max speed)."""
+    return _fmt(await bridge_call("time.set_speed", {"speed": speed}))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def pending_dialogs() -> str:
+    """Dialogs currently waiting for a player answer, with button response_ids and picker rows."""
+    return _fmt(await _localized("dialogs.list"))
+
+
+@mcp.tool(annotations=MUTATING)
+async def respond_dialog(dialog_id: int, response_id: str = "ok", picked: list[str] | None = None,
+                         text: str = "") -> str:
+    """Answer an open dialog. response_id: a button's response_id, or ok|cancel|close. For pickers pass
+    picked=[option_id,...]. For text prompts pass text."""
+    args: dict[str, Any] = {"dialog_id": dialog_id, "response_id": response_id}
+    if picked:
+        args["picked"] = picked
+    if text:
+        args["text"] = text
+    return _fmt(await bridge_call("dialogs.respond", args))
+
+
+@mcp.tool(annotations=MUTATING)
+async def wait(sim_minutes: int = 60, max_seconds: int = 20, speed: str = "ultra",
+               until_events: list[str] | None = None, stop_on_dialog: bool = True) -> str:
+    """Let sim time pass. Runs the clock at `speed` until `sim_minutes` elapse, `max_seconds` real seconds pass,
+    a dialog appears, or one of `until_events` (e.g. interaction.finished, sim.died, career.workday_complete)
+    fires. Then pauses and returns a fresh snapshot plus the events that happened. Call repeatedly for long waits."""
+    client = get_client()
+    before = await bridge_call("time.get")
+    start_seq = client.last_seq
+    await bridge_call("time.set_speed", {"speed": speed})
+    deadline = time.monotonic() + max(1, min(int(max_seconds), 25))
+    reason = "timeout"
+    watch = set(until_events or []) | ({"dialog.shown"} if stop_on_dialog else set())
+    try:
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            ev = await client.wait_for_event(lambda e: e.get("name") in watch, timeout=min(1.0, max(0.05, remaining)))
+            if ev is not None:
+                reason = f"event:{ev.get('name')}"
+                break
+            now = await bridge_call("time.get")
+            elapsed = _sim_minutes_between(before, now)
+            if elapsed >= int(sim_minutes):
+                reason = "sim_minutes_elapsed"
+                break
+            if now.get("paused"):
+                reason = "game_paused_externally"
+                break
+    finally:
+        try:
+            await bridge_call("time.set_speed", {"speed": "paused"})
+        except Exception:
+            pass
+    snap = await _localized("state.snapshot", {"include_buffs": False, "include_members": True})
+    household_ids = set(_sims_index(snap).keys())
+    events = []
+    for e in client.recent_events(since_seq=start_seq, limit=200):
+        name = e.get("name")
+        data = e.get("data") or {}
+        if name not in NOTABLE_EVENTS and name not in watch:
+            continue
+        # interaction chatter from NPCs is rarely useful; keep household sims and anything non-interaction
+        if name.startswith("interaction.") and data.get("sim_id") not in household_ids:
+            continue
+        events.append({"seq": e.get("seq"), "sim_ts": e.get("sim_ts"), "name": name, "data": data})
+    events = loc.resolve(events, _sims_index(snap))
+    return _fmt({"stopped_because": reason, "sim_minutes_waited": _sim_minutes_between(before, snap.get("time", {})),
+                 "events": events[-25:], "snapshot": snap})
+
+
+def _sim_minutes_between(a: dict[str, Any], b: dict[str, Any]) -> int:
+    try:
+        return int(b["abs_minutes"] - a["abs_minutes"])
+    except Exception:
+        try:
+            ma = a["hour"] * 60 + a["minute"]
+            mb = b["hour"] * 60 + b["minute"]
+            d = mb - ma
+            return d if d >= 0 else d + 24 * 60
+        except Exception:
+            return 0

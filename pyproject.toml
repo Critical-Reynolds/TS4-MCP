@@ -1,0 +1,32 @@
+[project]
+name = "ts4-mcp"
+version = "0.1.0"
+description = "MCP server that lets an LLM play The Sims 4 through an in-game Python bridge"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.3",
+    "pydantic>=2.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+ts4-mcp = "ts4_mcp.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server/ts4_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["server", "mod"]
+
+[tool.pyright]
+# Game modules resolve against the decompiled reference (gitignored, regenerate with tools/decompile).
+extraPaths = ["reference/scripts", "reference/stdlib", "mod", "server"]
+stubPath = "reference/stubs"
+reportMissingModuleSource = false

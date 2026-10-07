@@ -1,0 +1,10 @@
+﻿.venv/
+.toolchain/
+reference/
+build/
+*.ts4script
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.uv/

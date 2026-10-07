@@ -1,0 +1,13 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/reference/scripts",
+    "${workspaceFolder}/reference/stdlib",
+    "${workspaceFolder}/mod",
+    "${workspaceFolder}/server"
+  ],
+  "python.analysis.stubPath": "${workspaceFolder}/reference/stubs",
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingModuleSource": "none"
+  }
+}
