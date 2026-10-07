@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any
 
 from ts4_mcp import localization as loc
 from ts4_mcp.bridge_client import get_client
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError
+
 from ts4_mcp.server import DANGEROUS, MUTATING, READ_ONLY, _fmt, bridge_call, mcp
 
 NOTABLE_EVENTS = {
@@ -145,18 +149,62 @@ async def respond_dialog(dialog_id: int, response_id: str = "ok", picked: list[s
     return _fmt(await bridge_call("dialogs.respond", args))
 
 
+MAX_WAIT_SECONDS = int(os.environ.get("TS4_MAX_WAIT_SECONDS", "1800"))
+DEFAULT_WAKE_NEEDS = {"Bladder": -40, "Hunger": -30, "Energy": -60, "Hygiene": -50, "Social": -60, "Fun": -60}
+WAKE_TRIGGERS = ("idle", "needs", "sellable", "home", "left", "awake")
+
+
+def _wake_reasons(prev: dict[str, Any], cur: dict[str, Any], wake_on: set[str]) -> list[str]:
+    """Triggers fire on transitions between two wake.check polls, so a sim that is already idle (or already
+    hungry) when the wait starts doesn't end it instantly."""
+    pa, ca = prev.get("active") or {}, cur.get("active") or {}
+    out = []
+    if "home" in wake_on and ca.get("on_lot") and not pa.get("on_lot"):
+        out.append("home")
+    if "left" in wake_on and pa.get("on_lot") and not ca.get("on_lot"):
+        out.append("left")
+    if "awake" in wake_on and pa.get("sleeping") and ca.get("on_lot") and not ca.get("sleeping"):
+        out.append("awake")
+    if "idle" in wake_on and ca.get("idle") and pa.get("idle") is False:
+        out.append("idle")
+    if "needs" in wake_on:
+        newly = set(ca.get("below") or []) - set(pa.get("below") or [])
+        out.extend(f"need:{m}" for m in sorted(newly))
+    if "sellable" in wake_on and len(cur.get("sellable") or []) > len(prev.get("sellable") or []):
+        out.append("sellable")
+    return out
+
+
 @mcp.tool(annotations=MUTATING)
 async def wait(sim_minutes: int = 60, max_seconds: int = 20, speed: str = "ultra",
-               until_events: list[str] | None = None, stop_on_dialog: bool = True) -> str:
-    """Let sim time pass. Runs the clock at `speed` until `sim_minutes` elapse, `max_seconds` real seconds pass,
-    a dialog appears, or one of `until_events` (e.g. interaction.finished, sim.died, career.workday_complete)
-    fires. Then pauses and returns a fresh snapshot plus the events that happened. Call repeatedly for long waits."""
+               until_events: list[str] | None = None, stop_on_dialog: bool = True,
+               wake_on: list[str] | None = None, needs: dict[str, float] | None = None,
+               ctx: Context | None = None) -> str:
+    """Let sim time pass, then pause and return a fresh snapshot plus the events that happened.
+    Runs the clock at `speed` (ultra | super | auto = super while the sim sleeps or is away, ultra otherwise)
+    until `sim_minutes` elapse, `max_seconds` real seconds pass (up to 1800), a dialog appears, one of
+    `until_events` fires (interaction.finished, career.workday_complete, sim.skill_level...), or a `wake_on`
+    trigger fires: idle (stopped doing anything you directed), needs (a motive fell below `needs`
+    thresholds, e.g. {"Hunger": -30}), sellable (a painting finished), home / left (arrived on / left the
+    lot), awake (woke up). Use long waits with wake_on so you only act when a decision is needed."""
     client = get_client()
+    wake = set(wake_on or [])
+    unknown = wake - set(WAKE_TRIGGERS)
+    if unknown:
+        raise ToolError(f"unknown wake_on {sorted(unknown)}; use {list(WAKE_TRIGGERS)}")
+    thresholds = needs or (DEFAULT_WAKE_NEEDS if "needs" in wake else None)
+    poll_args = {"needs": thresholds, "speed": "auto" if speed == "auto" else None}
+    use_wake = bool(wake) or speed == "auto"
     before = await bridge_call("time.get")
     start_seq = client.last_seq
-    await bridge_call("time.set_speed", {"speed": speed})
-    deadline = time.monotonic() + max(1, min(int(max_seconds), 25))
+    await bridge_call("time.set_speed", {"speed": "ultra" if speed == "auto" else speed})
+    prev = await bridge_call("wake.check", poll_args) if use_wake else None
+    limit = max(1, min(int(max_seconds), MAX_WAIT_SECONDS))
+    started = time.monotonic()
+    deadline = started + limit
+    last_progress = started
     reason = "timeout"
+    fired: list[str] = []
     watch = set(until_events or []) | ({"dialog.shown"} if stop_on_dialog else set())
     try:
         while time.monotonic() < deadline:
@@ -165,7 +213,16 @@ async def wait(sim_minutes: int = 60, max_seconds: int = 20, speed: str = "ultra
             if ev is not None:
                 reason = f"event:{ev.get('name')}"
                 break
-            now = await bridge_call("time.get")
+            if use_wake:
+                cur = await bridge_call("wake.check", poll_args)
+                now = cur["time"]
+                fired = _wake_reasons(prev, cur, wake)
+                prev = cur
+                if fired:
+                    reason = "wake:" + ",".join(fired)
+                    break
+            else:
+                now = await bridge_call("time.get")
             elapsed = _sim_minutes_between(before, now)
             if elapsed >= int(sim_minutes):
                 reason = "sim_minutes_elapsed"
@@ -173,6 +230,12 @@ async def wait(sim_minutes: int = 60, max_seconds: int = 20, speed: str = "ultra
             if now.get("paused"):
                 reason = "game_paused_externally"
                 break
+            if ctx is not None and time.monotonic() - last_progress >= 10:
+                last_progress = time.monotonic()
+                try:
+                    await ctx.report_progress(elapsed, int(sim_minutes), f"{now.get('sim_now')} ({elapsed} sim min)")
+                except Exception:
+                    pass
     finally:
         try:
             await bridge_call("time.set_speed", {"speed": "paused"})
@@ -191,8 +254,11 @@ async def wait(sim_minutes: int = 60, max_seconds: int = 20, speed: str = "ultra
             continue
         events.append({"seq": e.get("seq"), "sim_ts": e.get("sim_ts"), "name": name, "data": data})
     events = loc.resolve(events, _sims_index(snap))
-    return _fmt({"stopped_because": reason, "sim_minutes_waited": _sim_minutes_between(before, snap.get("time", {})),
-                 "events": events[-25:], "snapshot": snap})
+    out: dict[str, Any] = {"stopped_because": reason, "sim_minutes_waited": _sim_minutes_between(before, snap.get("time", {})),
+                           "real_seconds": round(time.monotonic() - started, 1), "events": events[-25:], "snapshot": snap}
+    if use_wake and prev is not None:
+        out["sellable"] = prev.get("sellable")
+    return _fmt(out)
 
 
 def _sim_minutes_between(a: dict[str, Any], b: dict[str, Any]) -> int:

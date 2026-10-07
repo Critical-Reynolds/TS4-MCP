@@ -237,6 +237,69 @@ def time_set_speed(speed):
     return {'ok': bool(ok), **time_state()}
 
 
+PASSIVE_PREFIXES = ('sim-stand', 'stand_passive', 'sim_stand')
+
+
+def _user_directed(sim):
+    out = []
+    for i in list(sim.si_state) + list(sim.queue):
+        try:
+            name = L.tuning_name(i.affordance)
+        except Exception:
+            continue
+        if getattr(i, 'is_user_directed', False) and not name.lower().startswith(PASSIVE_PREFIXES):
+            out.append(name)
+    return out
+
+
+def _finished_crafts():
+    """Finished paintings (and other completed canvases) waiting to be sold."""
+    out = []
+    for o in services.object_manager().values():
+        if not type(o).__name__.startswith('object_Canvas'):
+            continue
+        cp = o.get_crafting_process() if hasattr(o, 'get_crafting_process') else None
+        if cp is not None and getattr(cp, 'is_complete', False) and getattr(o, 'current_value', 0):
+            out.append({'id': o.id, 'value': int(o.current_value)})
+    return out
+
+
+@op('wake.check', doc='One poll for wait(wake_on=...): time, active-sim facts (on lot, asleep, idle, motives '
+                      'below thresholds) and sellable crafts. speed=auto keeps super speed while the sim sleeps '
+                      'or is away and ultra otherwise (never overrides a pause).')
+def wake_check(needs=None, speed=None):
+    g.require_zone()
+    out = {'time': time_state()}
+    info = services.active_sim_info()
+    sim = info.get_sim_instance() if info is not None else None
+    active = {'sim_id': info.sim_id if info else None, 'on_lot': sim is not None}
+    sleeping = False
+    if sim is not None:
+        directed = _user_directed(sim)
+        running = []
+        for i in list(sim.si_state):
+            try:
+                running.append(L.tuning_name(i.affordance))
+            except Exception:
+                pass
+        sleeping = any('sleep' in n.lower() for n in running)
+        active.update({'idle': not directed, 'directed': directed[:5], 'sleeping': sleeping})
+        mot = {k: v['value'] for k, v in motives(info).items() if isinstance(v, dict)}
+        active['motives'] = {k: round(v, 1) for k, v in mot.items()}
+        active['below'] = sorted(k for k, t in (needs or {}).items() if k in mot and mot[k] < float(t))
+    out['active'] = active
+    out['sellable'] = _finished_crafts()
+    if speed and not out['time'].get('paused'):
+        if str(speed).lower() == 'auto':
+            mode = ClockSpeedMode.SUPER_SPEED3 if (sim is None or sleeping) else ClockSpeedMode.SPEED3
+        else:
+            mode = SPEED_NAMES.get(str(speed).lower())
+        gc = services.game_clock_service()
+        if mode is not None and gc.clock_speed != mode and not gc.set_clock_speed(mode):
+            gc.set_clock_speed(ClockSpeedMode.SPEED3)  # super speed refused (someone awake/on lot)
+    return out
+
+
 @op('time.advance', doc='Jump the game clock forward (cheat-like; sims do not simulate the skipped time).')
 def time_advance(hours=0, minutes=0):
     g.require_zone()

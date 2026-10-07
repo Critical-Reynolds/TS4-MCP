@@ -252,7 +252,7 @@ def interactions_queue(sim_id='active'):
 
 @op('interactions.cancel', doc='Cancel one interaction by id, or everything queued/running when interaction_id is null.')
 def interactions_cancel(sim_id='active', interaction_id=None, reason='ts4mcp cancel'):
-    from interactions import FinishingType
+    from interactions.interaction_finisher import FinishingType
     g.require_zone()
     info, sim = L.sim_instance(sim_id)
     cancelled = []

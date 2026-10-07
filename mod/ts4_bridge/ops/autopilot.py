@@ -25,6 +25,9 @@ _state = globals().setdefault('_state', {
               'errors': 0, 'last_error': None, 'started_funds': None, 'started_at': None},
     'log': [],
 })
+_state['cfg'].setdefault('chores', True)  # added after first release; keep existing state on reload
+# need thresholds (-100..100): act when the motive drops below; Energy forces sleep outside the sleep window
+_state['cfg'].setdefault('needs', {'Bladder': -30, 'Hunger': -20, 'Hygiene': -35, 'Social': -50, 'Energy': -60})
 
 NEED_RULES = (  # (motive, threshold, label, substrings meaning "already handling it")
     ('Bladder', -30, 'toilet', ('toilet',)),
@@ -113,10 +116,29 @@ def _cook_from_picker(sim, fridge):
     return False
 
 
+def _eat_existing(sim):
+    """Eat fresh food already on the lot (leftovers, an unfinished plate) instead of cooking more."""
+    from ts4_bridge.ops import interactions as I
+    for o in list(services.object_manager().values()):
+        if not type(o).__name__.startswith('object_Food') or 'Freshness_Spoiled' in _state_names(o):
+            continue
+        ctx = I.make_context(sim, target=o)
+        for aop in I.all_aops(sim, o, ctx):
+            name = L.tuning_name(aop.affordance)
+            if 'eat' in name.lower() and 'clean' not in name.lower() and getattr(aop, '_ts4_result', None):
+                if aop.test_and_execute(I.make_context(sim, target=o, insert='next')):
+                    _log('eat existing %s via %s' % (type(o).__name__, name))
+                    return True
+    return False
+
+
 def _eat(sim, info):
     now_min = services.time_service().sim_now.absolute_minutes()
     if now_min - _state.get('last_eat', -10 ** 9) < EAT_COOLDOWN_MIN:
         return 'cooldown'
+    if _eat_existing(sim):
+        _state['last_eat'] = now_min
+        return True
     fridge = _find('fridge')
     if fridge is None:
         return False
@@ -182,6 +204,84 @@ def _paint(sim):
     return ok
 
 
+MESS_TYPES = ('object_Food', 'object_FryingPan', 'object_Pot', 'object_IngredientTray', 'object_Dish', 'object_Plate',
+              'object_Bowl', 'object_Cup', 'object_Glass', 'object_Puddle', 'object_puddle', 'object_Trash')
+DIRTY_STATES = ('Dirty_Dirty', 'Dirty_Filthy', 'Dirty_VeryDirty', 'Dirty_Disgusting')
+
+
+def _state_names(obj):
+    try:
+        return [L.tuning_name(v) for _, v in obj.state_component.items()] if obj.state_component else []
+    except Exception:
+        return []
+
+
+def _messes(sim):
+    """Spoiled/abandoned food, dishes and puddles on the lot, plus fixtures that got dirty."""
+    out = []
+    lot = services.current_zone().lot
+    in_use = {getattr(i.target, 'id', None) for i in list(sim.si_state) + list(sim.queue)}
+    for o in services.object_manager().values():
+        if getattr(o, 'is_sim', False) or o.id in in_use:
+            continue
+        tn = type(o).__name__
+        try:
+            if not lot.is_position_on_lot(o.position):
+                continue
+        except Exception:
+            continue
+        states = _state_names(o)
+        if tn.startswith(MESS_TYPES):
+            parent = type(o.parent).__name__.lower() if o.parent is not None else ''
+            if tn.startswith('object_Food') and 'Freshness_Spoiled' not in states and 'counter' in parent:
+                continue  # fresh leftovers on a counter are food, not mess
+            out.append((o, 'dish'))
+        elif any(s in DIRTY_STATES for s in states):
+            out.append((o, 'fixture'))
+    return out
+
+
+def _repair(sim):
+    """Fix anything broken on the lot (the sim's own Repair interaction, not the paid service)."""
+    from ts4_bridge.ops import interactions as I
+    lot = services.current_zone().lot
+    for o in list(services.object_manager().values()):
+        if getattr(o, 'is_sim', False) or 'BrokenState_Broken' not in _state_names(o):
+            continue
+        try:
+            if not lot.is_position_on_lot(o.position):
+                continue
+        except Exception:
+            continue
+        for aop in I.all_aops(sim, o, I.make_context(sim, target=o)):
+            name = L.tuning_name(aop.affordance)
+            if name.startswith('object_Repair') and getattr(aop, '_ts4_result', None):
+                if aop.test_and_execute(I.make_context(sim, target=o, insert='first')):
+                    _log('repair %s' % type(o).__name__)
+                    return True
+    return False
+
+
+def _clean(sim):
+    from ts4_bridge.ops import interactions as I
+    for obj, kind in _messes(sim):
+        ctx = I.make_context(sim, target=obj)
+        names = []
+        for aop in I.all_aops(sim, obj, ctx):
+            name = L.tuning_name(aop.affordance)
+            if not getattr(aop, '_ts4_result', None) or not getattr(aop.affordance, 'allow_user_directed', True):
+                continue
+            low = name.lower()
+            if (kind == 'dish' and low.startswith(('cleanup_dishes', 'collect_clean_dish', 'mop', 'puddle'))) or \
+                    (kind == 'fixture' and 'clean' in low):
+                names.append((0 if 'trash' in low and 'Freshness_Spoiled' in _state_names(obj) else 1, name, aop))
+        for _, name, aop in sorted(names, key=lambda t: t[0]):
+            if aop.test_and_execute(I.make_context(sim, target=obj, insert='next')):
+                _log('clean %s via %s' % (type(obj).__name__, name))
+                return True
+    return False
+
+
 def _pay_bills():
     hh = services.active_household()
     bm = getattr(hh, 'bills_manager', None)
@@ -235,8 +335,11 @@ def step():
     busy = _active_names(sim)
     sleeping = any('sleep' in b.lower() for b in busy)
     act = None
-    if not sleeping:
+    if not sleeping and not any(b.startswith('object_Repair') for b in busy) and _repair(sim):
+        act = ('repair', True)
+    if not sleeping and act is None:
         for motive, threshold, label, handling in NEED_RULES:
+            threshold = cfg['needs'].get(motive, threshold)
             if m.get(motive, 100) < threshold and not any(h in b.lower() for b in busy for h in handling):
                 if label == 'eat':
                     act = ('eat', _eat(sim, info))
@@ -244,10 +347,16 @@ def step():
                     target = _find(label)
                     act = (label, _push(FIXTURES[label][1], target) if target else False)
                 break
-        if act is None and (hour >= cfg['sleep_from'] or hour < cfg['sleep_until'] or m.get('Energy', 100) < -60):
+        if act is None and (hour >= cfg['sleep_from'] or hour < cfg['sleep_until'] or m.get('Energy', 100) < cfg['needs'].get('Energy', -60)):
             bed = _find('bed')
             act = ('sleep', _push('bed_sleep', bed) if bed else False)
-        if act is None and not busy and cfg['activity'] == 'paint':
+        if act is None and not busy and m.get('Social', 100) < cfg['needs'].get('Social', -50):
+            computer = next((o for o in services.object_manager().values()
+                             if type(o).__name__.startswith('object_computer')), None)
+            act = ('chat', _push('computer_Chat', computer) if computer else False)
+        if act is None and not busy and cfg.get('chores', True) and _clean(sim):
+            act = ('clean', True)
+        if act is None and not busy and cfg['activity'] == 'paint':  # activity 'none': only needs/chores
             act = ('paint', _paint(sim))
     if cfg['fast']:
         _set_speed(sleeping)
@@ -305,9 +414,12 @@ def _stop_alarm():
                            'auto_dialogs, pay_bills, sleep_from, sleep_until.')
 def autopilot_start(**cfg):
     g.require_zone()
-    unknown = set(cfg) - set(_state['cfg'])
+    unknown = set(cfg) - set(_state['cfg'])  # 'needs' is a cfg key too (merged, not replaced)
     if unknown:
         raise OpError('unknown autopilot options: %s' % sorted(unknown), options=sorted(_state['cfg']))
+    needs = cfg.pop('needs', None)
+    if needs:
+        _state['cfg']['needs'].update(needs)
     _state['cfg'].update(cfg)
     _stop_alarm()
     import ts4_bridge

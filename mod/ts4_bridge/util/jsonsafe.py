@@ -1,5 +1,6 @@
 """Convert arbitrary game objects into JSON-serialisable data with size limits. Python 3.7."""
-import enum as _stdenum
+import enum as _stdenum  # the game replaces stdlib enum; it may lack Enum
+_ENUM_BASE = getattr(_stdenum, "Enum", None) or getattr(_stdenum, "Int", None) or ()
 
 _PRIMITIVES = (str, int, float, bool, type(None))
 
@@ -32,7 +33,7 @@ def jsonsafe(value, max_depth=6, max_items=200, max_chars=4000, _depth=0):
         return out
     # enum-ish (game enums subclass int but have a name)
     name = getattr(value, 'name', None)
-    if isinstance(value, _stdenum.Enum) or (isinstance(name, str) and hasattr(type(value), '__members__')):
+    if (_ENUM_BASE and isinstance(value, _ENUM_BASE)) or (isinstance(name, str) and hasattr(type(value), '__members__')):
         return str(name)
     # Vector3 / Quaternion / Transform style objects
     for attrs in (('x', 'y', 'z', 'w'), ('x', 'y', 'z')):

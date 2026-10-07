@@ -8,8 +8,10 @@ How to play
 - Act through interactions: `list_objects` to find targets, `list_interactions(sim, target, query)` for
   what is possible right now (ids + English names), `do_interaction` to queue it. Social actions target
   another sim's id. `cancel_interactions` clears the queue.
-- Time only advances while unpaused. `wait` runs the clock (default ultra speed) and returns early on
-  notable events or dialogs, then pauses. Chain `wait` calls for long stretches; never spin-poll.
+- Time only advances while unpaused. `wait` runs the clock and returns early on notable events or
+  dialogs, then pauses. For long stretches use one long wait that wakes you only when a decision is
+  needed: `wait(sim_minutes=1440, max_seconds=900, speed="auto", wake_on=["idle", "needs", "sellable",
+  "home", "awake"])`. speed=auto runs super speed while the sim sleeps or is at work. Never spin-poll.
 - Dialogs block the game. If `look`/`wait` report pending dialogs, `pending_dialogs` then
   `respond_dialog` before anything else.
 - Keep a journal (`journal_append`): goals, plan, what worked, discovered ids and def_ids.
@@ -44,6 +46,6 @@ Power tool
   expression's value is returned. Use it for anything no tool covers: explore with `dir(obj)`, keep calls
   small, never block, sleep or start threads, read before you mutate. A crash loses unsaved progress.
 - `cheat` runs console commands; `list_commands(search)` finds them. `bridge_ops` lists low-level ops.
-- Every tool must finish in under ~25 seconds. Long waits are chunked.
+- `wait` may run up to 30 real minutes (it reports progress); every other tool returns in seconds.
 
 Be concrete and economical: read only what you need, act, wait, verify, journal.
